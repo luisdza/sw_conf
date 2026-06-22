@@ -18,7 +18,7 @@ Given one captured dispute, return exactly one **disposition**, exactly one **ro
 
 ## Data contract
 
-### Form
+### Form (Captured by operator / not inputed into system)
 
 - customerId
 - transactionId
@@ -56,8 +56,6 @@ Operator performs lookup on this transaction.
 
 | Axis          | Values                                                                     |
 | ------------- | -------------------------------------------------------------------------- |
-| `disposition` | `RESOLVE_NOW` `INVESTIGATE` `ESCALATE` `REFER`                             |
+| `action`      | `RESOLVE_NOW` `INVESTIGATE` `ESCALATE` `REFER`                             |
 | `route`       | `FRONTLINE` `PAYMENTS_PROCESSING` `CARD_OPS` `FRAUD_TEAM` `LEDGER_CONTROL` |
-| `priority`    | `HIGH` `MEDIUM` `LOW`                                                      |
-
----
+| `priority`    | `HIGH` `MEDIUM` `LOW`                                                      
