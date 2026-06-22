@@ -1,18 +1,21 @@
 # Decision Rules — Dispute Triage (UC1)
 
 **Owner:** Business Analyst + Architect, co-signed by the Facilitator.
-**Status:** FROZEN. Revision: final draft (2026-06-22).
-Every requirement, test case, endpoint, and screen references this file. Changes require a re-freeze and a note to all roles; the "Revision note" at the bottom is that note for this revision.
+**Status:** FROZEN — 2026-06-22. Every requirement, test case, endpoint, and screen references this
+file. Changes require a re-freeze and a note to all roles; the Revision note at the bottom is that
+note for this revision.
 
 ## Purpose
 
-Given one captured dispute, return exactly one `action`, exactly one `route`, and exactly one `priority`, and record *why* (the ID of the rule that matched). The system is advisory: it produces a recommendation; a human performs the action.
+Given one captured dispute, return exactly one `disposition`, exactly one `route`, and exactly one
+`priority` — and record _why_ (the ID of the rule that matched). The system is advisory: it
+recommends; a human acts.
 
 ## Scope & assumptions
 
-- Channel: call-centre / ops capture form.
-- The customer has been authenticated before triage runs.
-- Local payments only; all amounts are in **ZAR**.
+- Channel: call-centre / ops capture form
+- The customer has been authenticated before triage runs
+- Local payments only; all amounts are in **ZAR**
 
 ---
 
@@ -20,101 +23,117 @@ Given one captured dispute, return exactly one `action`, exactly one `route`, an
 
 ### Form (captured by the operator at intake)
 
-Raw fields the operator records on the call. The rule engine does **not** read these directly — it reads the derived triage inputs below.
+**Operator-submitted:**
 
-- `customerId`
-- `transactionId`
-- `description`
 - `operatorId`
-- `accountNumber` — used to look up `customerType` and `accountType`
-- `amount`
-- authentication outcome (completed at intake — see Scope)
+- `customerId`
+- `accountNumber`
+- `transactionDate`
+- `transactionAmount`
+- `transactionStatus`
+- `disputeCaptureDate` (date the dispute was raised — kept for audit trail)
+- `disputeReason` (free text from customer; mapped to `disputeType` via backend lookup)
 
-The operator performs a lookup on `accountNumber`/`transactionId`, which yields `accountType`, `customerType`, `transactionDate`, `transactionStatus`, and `paymentType`.
+**Backend resolves via lookup:**
+
+- `customerType` (from `accountNumber`)
+- `accountType` (from `accountNumber`)
+- `transactionId` (from `accountNumber` + `transactionDate` + `transactionAmount`)
+- `transactionType` (from `transactionId`)
+- `disputeType` (from `disputeReason` → configured mapping table)
+
+**Backend computes:**
+
+- `disputeAgeDays` = today − `transactionDate`
 
 ### Inputs (the triage context the rules read)
 
-| Variable            | Type    | Values                                                          |
-| ------------------- | ------- | --------------------------------------------------------------- |
-| `amount`            | decimal | ZAR                                                             |
-| `accountType`       | enum    | `SAVINGS` / `CURRENT`                                           |
-| `transactionDate`   | date    | source for `disputeAgeDays` (= today − `transactionDate`)       |
-| `disputeType`       | enum    | `FRAUD` / `DUPLICATE` / `NON_RECEIPT` / `AUTHORIZATION_ISSUE` / `OTHER` |
-| `paymentType`       | enum    | `CARD` / `EFT` / `INTERNAL`                                     |
-| `transactionStatus` | enum    | `SUCCESS` / `FAILED` / `PENDING`                                |
-| `disputeAgeDays`    | integer | derived from `transactionDate`                                  |
-| `customerType`      | enum    | `BUSINESS` / `PERSONAL` / `PRIVATE_BANKING`                     |
+| Variable            | Type    | Values                                                                                   | Notes                                                  |
+| ------------------- | ------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `transactionAmount` | decimal | ZAR                                                                                      |                                                        |
+| `accountType`       | enum    | `SAVINGS / CURRENT`                                                                      | Display only — not used in current triage rules        |
+| `transactionType`   | enum    | `CARD / EFT / INTERNAL`                                                                  |                                                        |
+| `disputeType`       | enum    | `UNAUTHORISED / DUPLICATE / NON_RECEIPT / FAILED_TRANSFER / AUTHORIZATION_ISSUE / OTHER` | Mapped from `disputeReason` via lookup; drives routing |
+| `transactionStatus` | enum    | `SUCCESS / FAILED / PENDING`                                                             |                                                        |
+| `disputeAgeDays`    | integer |                                                                                          | Computed: today − `transactionDate`                    |
+| `customerType`      | enum    | `BUSINESS / PERSONAL / PRIVATE_BANKING`                                                  |                                                        |
 
-`disputeType` is the single routing taxonomy. If an `issueType` label is still captured on the form it is display-only and maps as: `Duplicate Debit → DUPLICATE`, `Missing Payment → NON_RECEIPT`, `Failed Transfer → NON_RECEIPT` (typically `paymentType = INTERNAL`), `Other → OTHER`.
+### Thresholds (constants)
 
-## Thresholds (constants)
+| Constant                 | Value   | Description                                                |
+| ------------------------ | ------- | ---------------------------------------------------------- |
+| `HIGH_VALUE_THRESHOLD`   | 100 000 | ZAR amount at or above which a dispute is high-value       |
+| `DISPUTE_MAX_DAYS`       | 90      | Max transaction age (days) at which a dispute can be filed |
+| `AGING_DAYS`             | 3       | Transaction age (days) after which frontline escalates     |
+| `COMPLIANCE_REVIEW_DAYS` | 30      | Transaction age (days) triggering compliance review        |
+| `REGULATORY_LIMIT_DAYS`  | 365     | Transaction age (days) triggering regulatory escalation    |
 
-| Constant                  | Value       | Used in        |
-| ------------------------- | ----------- | -------------- |
-| `HIGH_VALUE_THRESHOLD`    | 100 000 ZAR | DR-03          |
-| `AGING_DAYS`              | 3           | DR-08, DR-09   |
-| `STANDARD_REVIEW_DAYS`    | 5           | DR-11          |
-| `SLA_BREACH_DAYS`         | 7           | DR-07          |
-| `COMPLIANCE_REVIEW_DAYS`  | 30          | DR-04, DR-05   |
-| `REGULATORY_LIMIT_DAYS`   | 365         | DR-02          |
+### Outputs (closed sets)
 
-## Outputs (closed sets)
-
-| Axis       | Values                                                                                  |
-| ---------- | --------------------------------------------------------------------------------------- |
-| `action`   | `RESOLVE_NOW` `INVESTIGATE` `ESCALATE` `REFER`                                           |
-| `route`    | `FRONTLINE` `PAYMENTS_PROCESSING` `CARD_OPS` `FRAUD_TEAM` `LEDGER_CONTROL` `SENIOR_OPS` `COMPLIANCE` |
-| `priority` | `HIGH` `MEDIUM` `LOW`                                                                    |
+| Axis          | Values                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| `disposition` | `RESOLVE_NOW / INVESTIGATE / ESCALATE / REFER`                                                       |
+| `route`       | `FRONTLINE / PAYMENTS_PROCESSING / CARD_OPS / FRAUD_TEAM / LEDGER_CONTROL / SENIOR_OPS / COMPLIANCE` |
+| `priority`    | `HIGH / MEDIUM / LOW`                                                                                |
 
 ---
 
 ## Decision rules
 
-Rules are **ordered and evaluated top to bottom; the first rule whose condition is true wins** and evaluation stops. DR-12 is an unconditional default. First-match-wins plus the default guarantee that every valid input yields exactly one `action`, one `route`, and one `priority`. The matched rule ID is the recorded *why*.
+Rules are **ordered and evaluated top to bottom; the first rule whose condition is true wins** and
+evaluation stops. DR-14 is an unconditional default. First-match-wins plus the default guarantee
+that every valid input yields exactly one `disposition`, one `route`, and one `priority`. The
+matched rule ID is the recorded _why_.
 
-| ID    | Condition (first match wins)                                                                 | `action`     | `route`              | `priority` |
-| ----- | -------------------------------------------------------------------------------------------- | ------------ | -------------------- | ---------- |
-| DR-01 | `disputeType = FRAUD`                                                                         | `ESCALATE`   | `FRAUD_TEAM`         | `HIGH`     |
-| DR-02 | `disputeAgeDays > REGULATORY_LIMIT_DAYS`                                                      | `ESCALATE`   | `COMPLIANCE`         | `HIGH`     |
-| DR-03 | `amount >= HIGH_VALUE_THRESHOLD`                                                              | `ESCALATE`   | `SENIOR_OPS`         | `HIGH`     |
-| DR-04 | `customerType = BUSINESS AND disputeAgeDays <= COMPLIANCE_REVIEW_DAYS`                        | `ESCALATE`   | `SENIOR_OPS`         | `HIGH`     |
-| DR-05 | `disputeAgeDays > COMPLIANCE_REVIEW_DAYS`                                                     | `REFER`      | `COMPLIANCE`         | `MEDIUM`   |
-| DR-06 | `disputeType = NON_RECEIPT AND paymentType = INTERNAL`                                        | `INVESTIGATE`| `LEDGER_CONTROL`     | `MEDIUM`   |
-| DR-07 | `disputeType = DUPLICATE AND transactionStatus = SUCCESS AND disputeAgeDays <= SLA_BREACH_DAYS` | `RESOLVE_NOW`| `PAYMENTS_PROCESSING`| `MEDIUM`   |
-| DR-08 | `disputeType = NON_RECEIPT AND disputeAgeDays <= AGING_DAYS`                                  | `INVESTIGATE`| `FRONTLINE`          | `LOW`      |
-| DR-09 | `disputeType = NON_RECEIPT AND disputeAgeDays > AGING_DAYS`                                   | `INVESTIGATE`| `PAYMENTS_PROCESSING`| `MEDIUM`   |
-| DR-10 | `disputeType = AUTHORIZATION_ISSUE`                                                           | `INVESTIGATE`| `CARD_OPS`           | `MEDIUM`   |
-| DR-11 | `(accountType = SAVINGS OR accountType = CURRENT) AND disputeAgeDays <= STANDARD_REVIEW_DAYS` | `INVESTIGATE`| `FRONTLINE`          | `MEDIUM`   |
-| DR-12 | *(default — no earlier rule matched)*                                                         | `INVESTIGATE`| `FRONTLINE`          | `MEDIUM`   |
+| ID    | Condition (first match wins)                                                                           | `disposition` | `route`               | `priority` |
+| ----- | ------------------------------------------------------------------------------------------------------ | ------------- | --------------------- | ---------- |
+| DR-01 | `disputeType = UNAUTHORISED`                                                                           | `ESCALATE`    | `FRAUD_TEAM`          | `HIGH`     |
+| DR-02 | `disputeAgeDays > REGULATORY_LIMIT_DAYS`                                                               | `ESCALATE`    | `COMPLIANCE`          | `HIGH`     |
+| DR-03 | `transactionAmount >= HIGH_VALUE_THRESHOLD`                                                            | `ESCALATE`    | `SENIOR_OPS`          | `HIGH`     |
+| DR-04 | `customerType = BUSINESS AND disputeAgeDays <= COMPLIANCE_REVIEW_DAYS`                                 | `ESCALATE`    | `SENIOR_OPS`          | `HIGH`     |
+| DR-05 | `disputeAgeDays > COMPLIANCE_REVIEW_DAYS`                                                              | `REFER`       | `COMPLIANCE`          | `MEDIUM`   |
+| DR-06 | `disputeType = NON_RECEIPT AND transactionType = INTERNAL`                                             | `INVESTIGATE` | `LEDGER_CONTROL`      | `MEDIUM`   |
+| DR-07 | `disputeType = DUPLICATE AND transactionStatus = SUCCESS AND transactionAmount < HIGH_VALUE_THRESHOLD` | `RESOLVE_NOW` | `FRONTLINE`           | `LOW`      |
+| DR-08 | `disputeType = DUPLICATE`                                                                              | `INVESTIGATE` | `PAYMENTS_PROCESSING` | `MEDIUM`   |
+| DR-09 | `disputeType = FAILED_TRANSFER AND transactionStatus = FAILED`                                         | `RESOLVE_NOW` | `FRONTLINE`           | `LOW`      |
+| DR-10 | `disputeType = FAILED_TRANSFER AND transactionStatus = SUCCESS`                                        | `INVESTIGATE` | `PAYMENTS_PROCESSING` | `MEDIUM`   |
+| DR-11 | `disputeType = NON_RECEIPT AND disputeAgeDays <= AGING_DAYS`                                           | `INVESTIGATE` | `FRONTLINE`           | `LOW`      |
+| DR-12 | `disputeType = NON_RECEIPT`                                                                            | `INVESTIGATE` | `PAYMENTS_PROCESSING` | `MEDIUM`   |
+| DR-13 | `disputeType = AUTHORIZATION_ISSUE OR transactionType = CARD`                                          | `INVESTIGATE` | `CARD_OPS`            | `MEDIUM`   |
+| DR-14 | _(default — no earlier rule matched)_                                                                  | `INVESTIGATE` | `FRONTLINE`           | `MEDIUM`   |
 
 ### Rule notes
 
-- **DR-01** routes all fraud to the fraud team regardless of age, channel, or payment type, so fraud expertise is always applied first. If a fraud dispute is also past `REGULATORY_LIMIT_DAYS`, the fraud team notifies compliance as a procedural step.
-- **DR-02** before **DR-05**: over 365 days always escalates to compliance; 31–365 days is a compliance review. The two are mutually exclusive in effect.
-- **DR-03 / DR-04** sit above the type-specific rules: a high-value dispute, or any business dispute within the review window, escalates to senior ops before type handling is considered. A business dispute older than 30 days falls through to DR-05.
-- **DR-06** catches internal-transfer non-receipts (ledger issues) before the general non-receipt rules.
-- **DR-07** only refunds settled (`SUCCESS`) duplicates within SLA; a pending or failed duplicate is investigated instead (via DR-11 or DR-12).
-- **DR-09** has an effective window of 4–30 days (over 30 is caught by DR-05; internal transfers by DR-06). **DR-10** is effectively ≤30 days for the same reason.
-- **DR-12** guarantees totality, covering `disputeType = OTHER`, non-settled or aged-8–30 duplicates, retail accounts aged 6–30 days, and any `PRIVATE_BANKING`/`PERSONAL` combination not caught above.
+- **DR-01** routes all unauthorised transactions to the fraud team first, regardless of age, amount,
+  or channel. If the dispute is also past `REGULATORY_LIMIT_DAYS`, the fraud team notifies compliance
+  as a procedural step.
+- **DR-02 before DR-03/DR-04**: regulatory age takes precedence over value and customer type. A very
+  old high-value dispute goes to `COMPLIANCE`, not `SENIOR_OPS`.
+- **DR-03 / DR-04**: high-value disputes and all business-customer disputes (within 30 days) escalate
+  to senior ops before type-specific rules are applied. A business dispute older than 30 days falls
+  through to DR-05.
+- **DR-05** catches all disputes aged 31–365 days that are not unauthorised, not high-value, and not
+  from a business customer. Effective window: 31–365 days.
+- **DR-06** catches internal-transfer non-receipts (ledger reconciliation issues) before the general
+  non-receipt rules.
+- **DR-07** auto-resolves settled duplicates below the high-value threshold. A duplicate that is
+  `PENDING` or `FAILED`, or that exceeds the threshold, is investigated instead (DR-08).
+- **DR-08** is the duplicate catch-all. Covers `PENDING`/`FAILED` duplicates and high-value
+  duplicates not resolved by DR-07 (those were already escalated via DR-03).
+- **DR-09** closes failed-transfer disputes quickly when the transaction is confirmed `FAILED` —
+  no funds moved, so the case can be explained and closed at frontline.
+- **DR-10** investigates a reported failure where the transaction shows `SUCCESS` — funds may have
+  settled; trace through payments processing.
+- **DR-11 / DR-12**: NON_RECEIPT disputes 0–3 days old go to frontline for initial investigation;
+  older cases route to payments processing for deeper tracing.
+- **DR-13** handles card-scheme disputes (`AUTHORIZATION_ISSUE`) and any residual card-channel
+  disputes not caught by earlier type rules.
+- **DR-14** guarantees totality — covers `OTHER` dispute type, `FAILED_TRANSFER + PENDING`, and
+  any combination not matched above.
 
 ### Determinism & coverage check
 
-- **Exactly one output:** evaluation stops at the first match, so no input receives two outcomes.
-- **Total coverage:** DR-12 has no condition, so no input falls through with zero outcomes.
-- **No dead values:** every `action`, `route`, and `priority` value is reachable, and every constant is used.
-
----
-
-## Revision note (for re-freeze)
-
-This revision resolved the open decisions from the prior draft. The following are policy choices baked in here; confirm them at re-freeze:
-
-- **Routes.** `SENIOR_OPS` and `COMPLIANCE` were added to the `route` set; the draft's "Internal Operations" maps to `FRONTLINE`.
-- **Ordering.** Rules are first-match-wins with a default; the severity order (fraud → regulatory → high-value → business → aging → internal-ledger → type-specific → retail → default) defines behaviour.
-- **Business escalation.** Business disputes within 30 days escalate to senior ops (DR-04), overriding the duplicate-refund path.
-- **High value.** DR-03 (`amount >= HIGH_VALUE_THRESHOLD` → senior ops / HIGH) sits above the aging rule, so a high-value aged item escalates rather than going to compliance.
-- **Internal transfers.** Internal-transfer non-receipts route to `LEDGER_CONTROL` (DR-06).
-- **Refund safety.** Duplicate refunds are gated on `transactionStatus = SUCCESS` (DR-07).
-- **Escalation tier.** All escalations share priority `HIGH`; there is no separate "immediate" tier. Add an `action` or `priority` value if one is required.
-- **Constants.** Threshold values 5 / 30 / 365 were carried over from the draft as named constants; confirm the values.
-- **Owner role** was aligned to "Business Analyst" to match the rest of the spec pack.
+- **Exactly one output:** evaluation stops at the first match; no input receives two outcomes.
+- **Total coverage:** DR-14 has no condition; no input falls through with zero outcomes.
+- **No dead values:** every `disposition`, `route`, and `priority` value is reachable from at least
+  one rule, and every constant is referenced.
