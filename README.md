@@ -1,8 +1,10 @@
-# sw_conf
+# The Spec Pack
 
 The spec pack is the collection of artefacts that teams produce on Day 1. It is the input to Kiro on Day 2.
 
-Contents
+## Contents
+
+```
 docs/
 ├── requirements.md      # EARS-format requirements (BA)
 ├── test-cases.md        # Acceptance criteria (Test Architect)
@@ -31,3 +33,4 @@ docs/
 │   └── test-on-create.md
 └── skills/
     └── (optional custom skills)
+```
